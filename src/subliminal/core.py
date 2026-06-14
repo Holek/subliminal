@@ -26,7 +26,7 @@ from .extensions import (
 )
 from .matches import fps_matches
 from .score import compute_score as default_compute_score
-from .subtitle import SUBTITLE_EXTENSIONS, ExternalSubtitle, SubtitleCategory
+from .subtitle import SUBTITLE_EXTENSIONS, ExternalSubtitle, filter_and_sort_categories
 from .utils import get_age, handle_exception
 from .video import VIDEO_EXTENSIONS, Episode, Movie, Video
 
@@ -225,8 +225,7 @@ class ProviderPool:
         languages: Set[Language],
         *,
         min_score: int = 0,
-        hearing_impaired: bool | None = None,
-        foreign_only: bool | None = None,
+        subtitle_categories: str = '',
         skip_wrong_fps: bool = False,
         only_one: bool = False,
         compute_score: ComputeScore | None = None,
@@ -241,8 +240,8 @@ class ProviderPool:
         :param languages: languages to download.
         :type languages: set of :class:`~babelfish.language.Language`
         :param int min_score: minimum score for a subtitle to be downloaded.
-        :param (bool | None) hearing_impaired: hearing impaired preference (yes/no/indifferent).
-        :param (bool | None) foreign_only: foreign only preference (yes/no/indifferent).
+        :param str subtitle_categories: ordered list of categories to download, omitted categories are filtered out.
+            Empty string corresponds to no filtering or sorting.
         :param bool skip_wrong_fps: skip subtitles with an FPS that do not match the video (False).
         :param bool only_one: download only one subtitle, not one per language.
         :param compute_score: function that takes `subtitle` and `video` as positional arguments,
@@ -262,15 +261,8 @@ class ProviderPool:
         if skip_wrong_fps and video.frame_rate is not None and video.frame_rate > 0:
             subtitles = [s for s in subtitles if fps_matches(video, fps=s.fps, strict=False)]
 
-        # sort by hearing impaired and foreign only
-        category = SubtitleCategory.from_flags(hearing_impaired=hearing_impaired, foreign_only=foreign_only)
-        if category != SubtitleCategory.UNKNOWN:
-            logger.info('Sort subtitles by %s types first', category.value)
-            subtitles = sorted(
-                subtitles,
-                key=lambda s: s.category == category,
-                reverse=True,
-            )
+        # filter and sort by subtitle categories
+        subtitles = filter_and_sort_categories(subtitles, subtitle_categories=subtitle_categories)
 
         # sort subtitles by score
         scored_subtitles = sorted(
@@ -796,8 +788,7 @@ def download_best_subtitles(
     languages: Set[Language],
     *,
     min_score: int = 0,
-    hearing_impaired: bool | None = None,
-    foreign_only: bool | None = None,
+    subtitle_categories: str = '',
     skip_wrong_fps: bool = False,
     only_one: bool = False,
     compute_score: ComputeScore | None = None,
@@ -813,8 +804,8 @@ def download_best_subtitles(
     :param languages: languages to download.
     :type languages: set of :class:`~babelfish.language.Language`
     :param int min_score: minimum score for a subtitle to be downloaded.
-    :param (bool | None) hearing_impaired: hearing impaired preference (yes/no/indifferent).
-    :param (bool | None) foreign_only: foreign only preference (yes/no/indifferent).
+    :param str subtitle_categories: ordered list of categories to download, omitted categories are filtered out.
+        Empty string corresponds to no filtering or sorting.
     :param bool skip_wrong_fps: skip subtitles with an FPS that do not match the video (False).
     :param bool only_one: download only one subtitle, not one per language.
     :param compute_score: function that takes `subtitle` and `video` as positional arguments,
@@ -849,8 +840,7 @@ def download_best_subtitles(
                 video,
                 languages,
                 min_score=min_score,
-                hearing_impaired=hearing_impaired,
-                foreign_only=foreign_only,
+                subtitle_categories=subtitle_categories,
                 skip_wrong_fps=skip_wrong_fps,
                 only_one=only_one,
                 compute_score=compute_score,

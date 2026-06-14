@@ -6,7 +6,7 @@ import codecs
 import logging
 import os
 from codecs import BOM_UTF8, BOM_UTF16_BE, BOM_UTF16_LE, BOM_UTF32_BE, BOM_UTF32_LE
-from enum import Enum
+from enum import Flag, auto
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar
 
@@ -18,6 +18,8 @@ from pysubs2 import SSAFile, UnknownFPSError  # type: ignore[import-untyped]
 from subliminal.utils import trim_pattern
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
     from subliminal.video import Video
 
 logger = logging.getLogger(__name__)
@@ -68,45 +70,75 @@ def ensure_positive(value: float | None) -> float | None:
 
 
 #: Subtitle category
-class SubtitleCategory(Enum):
+class SubtitleCategory(Flag):
     """Subtitle category."""
 
-    UNKNOWN = 'unknown'
-    FOREIGN_ONLY = 'foreign_only'
-    NARRATIVE = 'narrative'
-    HEARING_IMPAIRED = 'hearing_impaired'
+    NARRATIVE = auto()
+    HEARING_IMPAIRED = auto()
+    FOREIGN_ONLY = auto()
 
     @classmethod
     def from_flags(cls, *, hearing_impaired: bool | None = None, foreign_only: bool | None = None) -> SubtitleCategory:
         """Convert to SubtitleCategory from flags."""
-        category = cls.UNKNOWN
+        category = cls.NARRATIVE
         # hearing_impaired takes precedence over foreign_only if both are True
         if hearing_impaired:
             category = cls.HEARING_IMPAIRED
         elif foreign_only:
             category = cls.FOREIGN_ONLY
-        # if hearing_impaired or foreign_only is specified to be False
-        # then for sure the subtitle is normal.
-        elif hearing_impaired is False or foreign_only is False:
-            category = cls.NARRATIVE
 
         return category
 
-    def is_hearing_impaired(self) -> bool | None:
+    def is_hearing_impaired(self) -> bool:
         """Flag for hearing impaired."""
-        if self == SubtitleCategory.HEARING_IMPAIRED:
-            return True
-        if self == SubtitleCategory.UNKNOWN:
-            return None
-        return False
+        return bool(self == SubtitleCategory.HEARING_IMPAIRED)
 
-    def is_foreign_only(self) -> bool | None:
+    def is_foreign_only(self) -> bool:
         """Flag for foreign only."""
-        if self == SubtitleCategory.FOREIGN_ONLY:
-            return True
-        if self == SubtitleCategory.UNKNOWN:
-            return None
-        return False
+        return bool(self == SubtitleCategory.FOREIGN_ONLY)
+
+
+def filter_and_sort_categories(subtitles: Sequence[Subtitle], subtitle_categories: str = '') -> list[Subtitle]:
+    """Filter and sort subtitles by categories.
+
+    :param subtitles: list of subtitles
+    :type subtitles: Sequence of :class:`~subliminal.subtitle.Subtitle`
+    :param str subtitle_categories: ordered list of categories to download, omitted categories are filtered out.
+        Empty string corresponds to no filtering or sorting.
+    :return: the filtered and sorted list of subtitles.
+    :rtype: list of :class:`~subliminal.subtitle.Subtitle`
+    """
+    correspondence = {
+        'n': SubtitleCategory.NARRATIVE,
+        'hi': SubtitleCategory.HEARING_IMPAIRED,
+        'fo': SubtitleCategory.FOREIGN_ONLY,
+    }
+
+    # if empty, no filtering or sorting
+    if not subtitle_categories:
+        return list(subtitles)
+
+    # parse categories
+    categories = [vv for v in subtitle_categories.split(',') if (vv := correspondence.get(v))]
+
+    if not categories:
+        msg = (
+            'No filtering or sorting by category, cannot parse the comma-separated list of subtitle categories: '
+            f'{subtitle_categories}'
+        )
+        logger.warning(msg)
+        return list(subtitles)
+
+    categories_str = ','.join([k for k, v in correspondence.items() for c in categories if v == c])
+    msg = f'Filter and sort subtitles by categories: {categories_str}'
+    logger.info(msg)
+
+    # filter and sort
+    return sorted(
+        # TODO: with python 3.11+ replace `bool(s.category & cc)` with `s.category in cc`
+        filter(lambda s: s.category in categories, subtitles),
+        key=lambda s: categories.index(s.category),
+    )
 
 
 class Subtitle:
@@ -765,7 +797,7 @@ def get_subtitle_suffix(
     language: Language,
     *,
     language_format: str = 'alpha2',
-    category: SubtitleCategory = SubtitleCategory.UNKNOWN,
+    category: SubtitleCategory = SubtitleCategory.NARRATIVE,
     category_suffix: bool = False,
     language_first: bool = False,
 ) -> str:
