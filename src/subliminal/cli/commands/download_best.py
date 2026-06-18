@@ -33,7 +33,7 @@ from subliminal.core import (
 )
 from subliminal.exceptions import GuessingError
 from subliminal.extensions import get_default_providers, get_default_refiners
-from subliminal.utils import merge_extend_and_ignore_unions
+from subliminal.utils import NameResolver, merge_extend_and_ignore_unions
 
 from ._format import AgeParamType, LanguageParamType, plural
 
@@ -332,7 +332,22 @@ REFINER = click.Choice(['ALL', *sorted(refiner_manager.names())])
     metavar='NAME',
     help=(
         'Name used instead of the path name for guessing information about the file. '
-        'If used with multiple paths or a directory, `name` is passed to ALL the files.'
+        'If used with multiple paths or a directory, `name` is passed to ALL the files. '
+        'NAME may also be a sed-like substitution `s/pattern/replacement/flags` '
+        '(flags `g` and `i` are supported), applied to each file name individually. '
+        'Or, when --name-pattern is given, NAME is used as a template whose '
+        r'back-references (\1, \2, ...) are filled from the match on each file name.'
+    ),
+)
+@click.option(
+    '--name-pattern',
+    type=click.STRING,
+    metavar='PATTERN',
+    default=None,
+    help=(
+        'Regular expression matched against each file name to capture groups that are '
+        r'substituted into the --name template (\1, \2, ...). Ignored when --name is '
+        'a sed-like substitution expression.'
     ),
 )
 @click.option('-v', '--verbose', count=True, help='Increase verbosity.')
@@ -369,6 +384,7 @@ def download(
     archives: bool,
     use_absolute_path: str,
     name: str | None,
+    name_pattern: str | None,
     verbose: int,
     path: list[str],
 ) -> None:
@@ -389,6 +405,12 @@ def download(
     # no subtitle_format specified, default to None Also convert to None --subtitle_format=''
     if not subtitle_format or subtitle_format in ['""', "''"]:
         subtitle_format = None
+
+    # build the per-file name resolver (static name, sed substitution or template + pattern)
+    try:
+        name_resolver = NameResolver(name, name_pattern)
+    except ValueError as e:
+        raise click.BadParameter(str(e), param_hint='--name') from e
 
     # TODO: deprecate
     # subtitle category
@@ -466,15 +488,19 @@ def download(
             # scan videos
             video_candidates: list[Video] = []
             for filepath in collected_filepaths:
+                # Resolve the name to use for this specific file
+                file_name = name_resolver(filepath)
                 # Try scanning the video at path
-                video = scan_video_path(filepath, absolute_path=absolute_path, name=name, verbose=verbose, debug=debug)
+                video = scan_video_path(
+                    filepath, absolute_path=absolute_path, name=file_name, verbose=verbose, debug=debug
+                )
                 if video is None:
                     # Fallback to scanning with absolute path
                     if use_absolute_path == 'fallback':
                         video = scan_video_path(
                             filepath,
                             absolute_path=True,
-                            name=name,
+                            name=file_name,
                             verbose=verbose,
                             debug=debug,
                         )

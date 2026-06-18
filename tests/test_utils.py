@@ -10,6 +10,7 @@ import requests
 
 from subliminal.exceptions import ServiceUnavailable
 from subliminal.utils import (
+    NameResolver,
     clip,
     creation_date,
     decorate_imdb_id,
@@ -21,6 +22,7 @@ from subliminal.utils import (
     matches_extended_title,
     merge_extend_and_ignore_unions,
     modification_date,
+    parse_sed_expression,
     safely_guessit,
     sanitize,
     sanitize_id,
@@ -364,3 +366,79 @@ def test_clip(value: float, minimum: float | None, maximum: float | None, expect
 def test_trim_pattern(string: str, patterns: str | Sequence[str], sep: str, expected: tuple[str, str]) -> None:
     res = trim_pattern(string, patterns, sep=sep)
     assert res == expected
+
+
+@pytest.mark.parametrize(
+    ('expr', 'expected'),
+    [
+        ('s/a/b/', ('a', 'b', '')),
+        ('s/a/b/gi', ('a', 'b', 'gi')),
+        (r's/a\/b/c/', ('a/b', 'c', '')),  # escaped delimiter inside pattern
+        ('s|a|b|', ('a', 'b', '')),  # alternative delimiter
+        (r's/.*S(\d+)E(\d+).*/S\1E\2/', (r'.*S(\d+)E(\d+).*', r'S\1E\2', '')),
+        ('s/a/b', None),  # missing closing delimiter
+        ('s/a/b/c/d', None),  # too many segments
+        ('show.s01.e01.mkv', None),  # plain name with several dots
+        ('My Show S01E01.mkv', None),  # plain name
+        ('sea/b/c', None),  # delimiter is alphanumeric
+        ('', None),
+    ],
+)
+def test_parse_sed_expression(expr: str, expected: tuple[str, str, str] | None) -> None:
+    assert parse_sed_expression(expr) == expected
+
+
+def test_name_resolver_static() -> None:
+    resolver = NameResolver('My Show S01E01.mkv')
+    assert resolver.mode == 'static'
+    # same name returned for every file
+    assert resolver('whatever.mkv') == 'My Show S01E01.mkv'
+    assert resolver('other.mkv') == 'My Show S01E01.mkv'
+
+
+def test_name_resolver_none() -> None:
+    resolver = NameResolver(None)
+    assert resolver('whatever.mkv') is None
+
+
+def test_name_resolver_sed() -> None:
+    resolver = NameResolver(r's/.*YP-1R-([0-9]+)x([0-9]+).*/My Little Pony S\1E\2.mkv/')
+    assert resolver.mode == 'sed'
+    assert resolver('/path/to/YP-1R-01x05-720p.mkv') == 'My Little Pony S01E05.mkv'
+    # non-matching file falls back to None
+    assert resolver('unrelated.mkv') is None
+
+
+def test_name_resolver_sed_flags() -> None:
+    # without g, only the first occurrence is replaced
+    assert NameResolver('s/a/X/')('aaa.mkv') == 'Xaa.mkv'
+    # g replaces all occurrences
+    assert NameResolver('s/a/X/g')('aaa.mkv') == 'XXX.mkv'
+    # i is case-insensitive
+    assert NameResolver('s/a/X/gi')('AaA.mkv') == 'XXX.mkv'
+
+
+def test_name_resolver_sed_whole_match() -> None:
+    # sed & references the whole match, \& is a literal &
+    assert NameResolver('s/[0-9]+/[&]/')('ep12.mkv') == 'ep[12].mkv'
+    assert NameResolver(r's/[0-9]+/\&/')('ep12.mkv') == 'ep&.mkv'
+
+
+def test_name_resolver_template() -> None:
+    resolver = NameResolver(r'Panty & Stocking S01E\1.mkv', r'.*_-_([0-9]+)_.*')
+    assert resolver.mode == 'template'
+    assert resolver('Garterbelt_-_07_xyz.mkv') == 'Panty & Stocking S01E07.mkv'
+    # non-matching file falls back to None
+    assert resolver('Garterbelt.mkv') is None
+
+
+def test_name_resolver_invalid_sed_flag() -> None:
+    with pytest.raises(ValueError, match='Unsupported flag'):
+        NameResolver('s/a/b/x')
+
+
+def test_name_resolver_invalid_regex() -> None:
+    with pytest.raises(ValueError, match='Invalid regular expression'):
+        NameResolver('s/(/x/')
+    with pytest.raises(ValueError, match='Invalid regular expression'):
+        NameResolver(r'Show \1.mkv', '(')

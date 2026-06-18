@@ -76,6 +76,186 @@ def safely_guessit(name: str | None, options: dict[str, Any] | None = None) -> d
     return result
 
 
+def parse_sed_expression(expr: str) -> tuple[str, str, str] | None:
+    """Parse a sed-like substitution ``s<delim>pattern<delim>replacement<delim>flags``.
+
+    The delimiter is the character right after the leading ``s`` and may be any
+    non-alphanumeric, non-backslash, non-whitespace character (commonly ``/``).
+    A delimiter escaped with a backslash inside the pattern or the replacement is
+    treated as a literal delimiter character.
+
+    :param str expr: the expression to parse.
+    :return: ``(pattern, replacement, flags)`` or ``None`` if `expr` is not a
+        well-formed sed substitution.
+    :rtype: tuple of (str, str, str) or None
+    """
+    if len(expr) < 2 or expr[0] != 's':
+        return None
+    delim = expr[1]
+    if delim.isalnum() or delim == '\\' or delim.isspace():
+        return None
+
+    segments: list[str] = []
+    current: list[str] = []
+    i = 2
+    n = len(expr)
+    while i < n:
+        c = expr[i]
+        if c == '\\' and i + 1 < n:
+            nxt = expr[i + 1]
+            if nxt == delim:
+                # Unescape an escaped delimiter
+                current.append(delim)
+            else:
+                current.append(c)
+                current.append(nxt)
+            i += 2
+            continue
+        if c == delim:
+            segments.append(''.join(current))
+            current = []
+            i += 1
+            continue
+        current.append(c)
+        i += 1
+    segments.append(''.join(current))
+
+    # Expect exactly pattern, replacement and flags (i.e. three delimiters total)
+    if len(segments) != 3:
+        return None
+    return segments[0], segments[1], segments[2]
+
+
+def _sed_replacement_to_python(replacement: str) -> str:
+    r"""Translate a sed replacement string to the :func:`re.sub` replacement syntax.
+
+    Group back-references (``\\1`` … ``\\9``) are already compatible with
+    :func:`re.sub`. This mainly turns the sed whole-match reference ``&`` into
+    ``\\g<0>`` and ``\\&`` into a literal ``&``.
+
+    :param str replacement: the sed-style replacement string.
+    :return: an equivalent :func:`re.sub` replacement string.
+    :rtype: str
+    """
+    out: list[str] = []
+    i = 0
+    n = len(replacement)
+    while i < n:
+        c = replacement[i]
+        if c == '\\' and i + 1 < n:
+            nxt = replacement[i + 1]
+            if nxt == '&':
+                out.append('&')
+            else:
+                out.append('\\')
+                out.append(nxt)
+            i += 2
+            continue
+        if c == '&':
+            out.append('\\g<0>')
+            i += 1
+            continue
+        out.append(c)
+        i += 1
+    return ''.join(out)
+
+
+class NameResolver:
+    r"""Compute the name passed to guessit for each scanned file.
+
+    The behaviour is selected from the `name` and `name_pattern` inputs:
+
+    * **static** -- `name` is a plain string and `name_pattern` is not given: the
+      same `name` is used for every file (the historical behaviour).
+    * **sed** -- `name` is a ``s/pattern/replacement/flags`` substitution: the
+      substitution is applied to each file base name following sed semantics (the
+      unmatched part of the name is kept). Supported flags are ``g`` (replace all
+      occurrences instead of the first) and ``i`` (case-insensitive match).
+    * **template** -- `name_pattern` is a regular expression matched against each
+      file base name and `name` is a template containing back-references
+      (``\\1`` …): the template, with back-references filled from the match, is
+      the resulting name.
+
+    In the sed and template modes, a file whose base name does not match is left
+    untouched (``None`` is returned, and the original path is used as before).
+
+    :param str name: the ``--name`` value, may be ``None``.
+    :param str name_pattern: the ``--name-pattern`` regular expression, may be ``None``.
+    :raises ValueError: if a provided regular expression or sed expression is invalid.
+    """
+
+    def __init__(self, name: str | None = None, name_pattern: str | None = None) -> None:
+        self.name = name
+        self.name_pattern = name_pattern
+        self.mode = 'static'
+        self._regex: re.Pattern[str] | None = None
+        self._replacement = ''
+        self._count = 1
+
+        if name is None:
+            return
+
+        sed = parse_sed_expression(name)
+        if sed is not None:
+            if name_pattern:
+                logger.warning(
+                    '--name is a substitution expression, ignoring --name-pattern %r', name_pattern
+                )
+            pattern, replacement, flags = sed
+            unknown = set(flags) - set('gi')
+            if unknown:
+                msg = f'Unsupported flag(s) {"".join(sorted(unknown))!r} in name expression {name!r}'
+                raise ValueError(msg)
+            re_flags = re.IGNORECASE if 'i' in flags else 0
+            try:
+                self._regex = re.compile(pattern, re_flags)
+            except re.error as e:
+                msg = f'Invalid regular expression {pattern!r} in name expression {name!r}: {e}'
+                raise ValueError(msg) from e
+            self._replacement = _sed_replacement_to_python(replacement)
+            self._count = 0 if 'g' in flags else 1
+            self.mode = 'sed'
+            return
+
+        if name_pattern:
+            try:
+                self._regex = re.compile(name_pattern)
+            except re.error as e:
+                msg = f'Invalid regular expression {name_pattern!r} in --name-pattern: {e}'
+                raise ValueError(msg) from e
+            self._replacement = name
+            self.mode = 'template'
+
+    def __call__(self, filepath: str | os.PathLike[str]) -> str | None:
+        """Return the name to use for `filepath`, or ``None`` to use the path as-is."""
+        if self.mode == 'static' or self._regex is None:
+            return self.name
+
+        base = os.path.basename(os.fspath(filepath))
+
+        if self.mode == 'sed':
+            try:
+                new_name, count = self._regex.subn(self._replacement, base, count=self._count)
+            except re.error:
+                logger.exception('Failed to apply name expression %r to %r', self.name, base)
+                return None
+            if count == 0:
+                logger.warning('Name expression %r did not match %r', self.name, base)
+                return None
+            return new_name
+
+        # template mode
+        match = self._regex.search(base)
+        if match is None:
+            logger.warning('Name pattern %r did not match %r', self.name_pattern, base)
+            return None
+        try:
+            return match.expand(self._replacement)
+        except re.error:
+            logger.exception('Failed to expand name template %r for %r', self.name, base)
+            return None
+
+
 class none_passthrough(Generic[T, R]):
     """Decorator to pass-through None input values."""
 
