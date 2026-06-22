@@ -127,11 +127,12 @@ def parse_sed_expression(expr: str) -> tuple[str, str, str] | None:
 
 
 def _sed_replacement_to_python(replacement: str) -> str:
-    r"""Translate a sed replacement string to the :func:`re.sub` replacement syntax.
+    r"""Adapt a sed replacement string to the :func:`re.sub` replacement syntax.
 
-    Group back-references (``\\1`` … ``\\9``) are already compatible with
-    :func:`re.sub`. This mainly turns the sed whole-match reference ``&`` into
-    ``\\g<0>`` and ``\\&`` into a literal ``&``.
+    Group back-references (``\1`` … ``\9`` and ``\g<name>``) already match the
+    :func:`re.sub` syntax and are left untouched. Unlike sed, ``&`` is a literal
+    character here (it is *not* the whole match); an escaped ``\&`` is therefore
+    collapsed to a plain ``&`` so both spellings produce a literal ampersand.
 
     :param str replacement: the sed-style replacement string.
     :return: an equivalent :func:`re.sub` replacement string.
@@ -142,18 +143,9 @@ def _sed_replacement_to_python(replacement: str) -> str:
     n = len(replacement)
     while i < n:
         c = replacement[i]
-        if c == '\\' and i + 1 < n:
-            nxt = replacement[i + 1]
-            if nxt == '&':
-                out.append('&')
-            else:
-                out.append('\\')
-                out.append(nxt)
+        if c == '\\' and i + 1 < n and replacement[i + 1] == '&':
+            out.append('&')
             i += 2
-            continue
-        if c == '&':
-            out.append('\\g<0>')
-            i += 1
             continue
         out.append(c)
         i += 1
@@ -163,30 +155,27 @@ def _sed_replacement_to_python(replacement: str) -> str:
 class NameResolver:
     r"""Compute the name passed to guessit for each scanned file.
 
-    The behaviour is selected from the `name` and `name_pattern` inputs:
+    The behaviour is selected from the `name` input:
 
-    * **static** -- `name` is a plain string and `name_pattern` is not given: the
-      same `name` is used for every file (the historical behaviour).
+    * **static** -- `name` is a plain string: the same `name` is used for every
+      file (the historical behaviour).
     * **sed** -- `name` is a ``s/pattern/replacement/flags`` substitution: the
       substitution is applied to each file base name following sed semantics (the
-      unmatched part of the name is kept). Supported flags are ``g`` (replace all
-      occurrences instead of the first) and ``i`` (case-insensitive match).
-    * **template** -- `name_pattern` is a regular expression matched against each
-      file base name and `name` is a template containing back-references
-      (``\\1`` …): the template, with back-references filled from the match, is
-      the resulting name.
+      unmatched part of the name is kept). Back-references (``\1`` …) are
+      available in the replacement, ``&`` is a literal character and the
+      supported flags are ``g`` (replace all occurrences instead of the first)
+      and ``i`` (case-insensitive match).
 
-    In the sed and template modes, a file whose base name does not match is left
-    untouched (``None`` is returned, and the original path is used as before).
+    In the sed mode, a file whose base name does not match is left untouched
+    (``None`` is returned, and the original path is used as before).
 
     :param str name: the ``--name`` value, may be ``None``.
-    :param str name_pattern: the ``--name-pattern`` regular expression, may be ``None``.
-    :raises ValueError: if a provided regular expression or sed expression is invalid.
+    :raises ValueError: if the sed expression contains an invalid regular
+        expression or an unsupported flag.
     """
 
-    def __init__(self, name: str | None = None, name_pattern: str | None = None) -> None:
+    def __init__(self, name: str | None = None) -> None:
         self.name = name
-        self.name_pattern = name_pattern
         self.mode = 'static'
         self._regex: re.Pattern[str] | None = None
         self._replacement = ''
@@ -196,35 +185,24 @@ class NameResolver:
             return
 
         sed = parse_sed_expression(name)
-        if sed is not None:
-            if name_pattern:
-                logger.warning(
-                    '--name is a substitution expression, ignoring --name-pattern %r', name_pattern
-                )
-            pattern, replacement, flags = sed
-            unknown = set(flags) - set('gi')
-            if unknown:
-                msg = f'Unsupported flag(s) {"".join(sorted(unknown))!r} in name expression {name!r}'
-                raise ValueError(msg)
-            re_flags = re.IGNORECASE if 'i' in flags else 0
-            try:
-                self._regex = re.compile(pattern, re_flags)
-            except re.error as e:
-                msg = f'Invalid regular expression {pattern!r} in name expression {name!r}: {e}'
-                raise ValueError(msg) from e
-            self._replacement = _sed_replacement_to_python(replacement)
-            self._count = 0 if 'g' in flags else 1
-            self.mode = 'sed'
+        if sed is None:
+            # plain static name, used as-is for every file
             return
 
-        if name_pattern:
-            try:
-                self._regex = re.compile(name_pattern)
-            except re.error as e:
-                msg = f'Invalid regular expression {name_pattern!r} in --name-pattern: {e}'
-                raise ValueError(msg) from e
-            self._replacement = name
-            self.mode = 'template'
+        pattern, replacement, flags = sed
+        unknown = set(flags) - set('gi')
+        if unknown:
+            msg = f'Unsupported flag(s) {"".join(sorted(unknown))!r} in name expression {name!r}'
+            raise ValueError(msg)
+        re_flags = re.IGNORECASE if 'i' in flags else 0
+        try:
+            self._regex = re.compile(pattern, re_flags)
+        except re.error as e:
+            msg = f'Invalid regular expression {pattern!r} in name expression {name!r}: {e}'
+            raise ValueError(msg) from e
+        self._replacement = _sed_replacement_to_python(replacement)
+        self._count = 0 if 'g' in flags else 1
+        self.mode = 'sed'
 
     def __call__(self, filepath: str | os.PathLike[str]) -> str | None:
         """Return the name to use for `filepath`, or ``None`` to use the path as-is."""
@@ -232,28 +210,15 @@ class NameResolver:
             return self.name
 
         base = os.path.basename(os.fspath(filepath))
-
-        if self.mode == 'sed':
-            try:
-                new_name, count = self._regex.subn(self._replacement, base, count=self._count)
-            except re.error:
-                logger.exception('Failed to apply name expression %r to %r', self.name, base)
-                return None
-            if count == 0:
-                logger.warning('Name expression %r did not match %r', self.name, base)
-                return None
-            return new_name
-
-        # template mode
-        match = self._regex.search(base)
-        if match is None:
-            logger.warning('Name pattern %r did not match %r', self.name_pattern, base)
-            return None
         try:
-            return match.expand(self._replacement)
+            new_name, count = self._regex.subn(self._replacement, base, count=self._count)
         except re.error:
-            logger.exception('Failed to expand name template %r for %r', self.name, base)
+            logger.exception('Failed to apply name expression %r to %r', self.name, base)
             return None
+        if count == 0:
+            logger.warning('Name expression %r did not match %r', self.name, base)
+            return None
+        return new_name
 
 
 class none_passthrough(Generic[T, R]):

@@ -571,7 +571,7 @@ def test_cli_download_name_sed(cli_runner: CliRunner, monkeypatch: pytest.Monkey
         assert ('YP-1R-01x05-720p.mkv', 'My Little Pony S01E05.mkv') in captured
 
 
-def test_cli_download_name_template(cli_runner: CliRunner, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_cli_download_name_ampersand(cli_runner: CliRunner, monkeypatch: pytest.MonkeyPatch) -> None:
     import subliminal.cli.commands.download_best as dl
 
     captured: list[tuple[str, str | None]] = []
@@ -592,15 +592,14 @@ def test_cli_download_name_template(cli_runner: CliRunner, monkeypatch: pytest.M
                 'en',
                 '-p',
                 'podnapisi',
-                '--name-pattern',
-                r'.*_-_([0-9]+)_.*',
                 '--name',
-                r'Panty & Stocking S01E\1.mkv',
+                r's/.*_-_([0-9]+)_.*/Panty & Stocking S01E\1.mkv/',
                 'Garterbelt_-_07_xyz.mkv',
             ],
         )
 
         assert result.exit_code == 0
+        # the literal ampersand in the title is preserved
         assert ('Garterbelt_-_07_xyz.mkv', 'Panty & Stocking S01E07.mkv') in captured
 
 

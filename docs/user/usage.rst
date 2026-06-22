@@ -40,21 +40,20 @@ The ``--name/-n`` option lets you override the name used to guess information ab
 plain static name, it can rewrite each file name individually so you no longer need a shell loop to rename
 poorly-named releases before downloading.
 
-Use a `sed <https://www.gnu.org/software/sed/manual/sed.html>`_-like substitution
+Pass a `sed <https://www.gnu.org/software/sed/manual/sed.html>`_-like substitution
 ``s/pattern/replacement/flags`` and it is applied to every file name on its own. Back-references
-(``\1``, ``\2``, …) and the whole-match reference (``&``) are available in the replacement, and the
-``g`` (replace all occurrences) and ``i`` (case-insensitive) flags are supported::
+(``\1``, ``\2``, …) are available in the replacement, and the ``g`` (replace all occurrences) and ``i``
+(case-insensitive) flags are supported::
 
     $ subliminal download -l pl \
         --name 's/.*YP-1R-([0-9]+)x([0-9]+).*/My Little Pony Friendship Is Magic S\1E\2.mkv/' \
         */YP-1R-*.mkv
 
-Alternatively, supply a regular expression with ``--name-pattern`` and use ``--name`` as a template whose
-back-references are filled from the match on each file name::
+Unlike sed, ``&`` is a literal character (not the whole match), so titles containing an ampersand need
+no escaping::
 
     $ subliminal download -l pl \
-        --name-pattern '.*_-_([0-9]+)_.*' \
-        --name 'Panty & Stocking with Garterbelt S01E\1.mkv' \
+        --name 's/.*_-_([0-9]+)_.*/Panty & Stocking with Garterbelt S01E\1.mkv/' \
         *Garterbelt_-_*.mkv
 
 Any file whose name does not match is left untouched and scanned as-is.

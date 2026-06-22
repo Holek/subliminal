@@ -418,18 +418,24 @@ def test_name_resolver_sed_flags() -> None:
     assert NameResolver('s/a/X/gi')('AaA.mkv') == 'XXX.mkv'
 
 
-def test_name_resolver_sed_whole_match() -> None:
-    # sed & references the whole match, \& is a literal &
-    assert NameResolver('s/[0-9]+/[&]/')('ep12.mkv') == 'ep[12].mkv'
+def test_name_resolver_sed_ampersand_is_literal() -> None:
+    # unlike sed, & is a literal character (not the whole match)
+    assert NameResolver('s/[0-9]+/[&]/')('ep12.mkv') == 'ep[&].mkv'
+    # an escaped \& also yields a literal &
     assert NameResolver(r's/[0-9]+/\&/')('ep12.mkv') == 'ep&.mkv'
-
-
-def test_name_resolver_template() -> None:
-    resolver = NameResolver(r'Panty & Stocking S01E\1.mkv', r'.*_-_([0-9]+)_.*')
-    assert resolver.mode == 'template'
+    # so a real-world title with & needs no escaping
+    resolver = NameResolver(r's/.*_-_([0-9]+)_.*/Panty & Stocking S01E\1.mkv/')
     assert resolver('Garterbelt_-_07_xyz.mkv') == 'Panty & Stocking S01E07.mkv'
     # non-matching file falls back to None
     assert resolver('Garterbelt.mkv') is None
+
+
+def test_name_resolver_bad_group_reference() -> None:
+    # the pattern compiles, but the replacement references a missing group: the
+    # substitution fails at call time and the file is left untouched
+    resolver = NameResolver(r's/(a)/X\2Y/')
+    assert resolver.mode == 'sed'
+    assert resolver('aaa.mkv') is None
 
 
 def test_name_resolver_invalid_sed_flag() -> None:
@@ -440,5 +446,3 @@ def test_name_resolver_invalid_sed_flag() -> None:
 def test_name_resolver_invalid_regex() -> None:
     with pytest.raises(ValueError, match='Invalid regular expression'):
         NameResolver('s/(/x/')
-    with pytest.raises(ValueError, match='Invalid regular expression'):
-        NameResolver(r'Show \1.mkv', '(')

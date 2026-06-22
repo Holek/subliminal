@@ -1,1 +1,2 @@
-Allow ``--name`` to parameterize the guessed name per file, using a sed-like ``s/pattern/replacement/flags`` substitution or a ``--name`` template combined with a new ``--name-pattern`` regular expression
+Allow ``--name`` to be a sed-like ``s/pattern/replacement/flags`` substitution, applied to each file name
+individually, to parameterize the guessed name per file

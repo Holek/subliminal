@@ -333,21 +333,10 @@ REFINER = click.Choice(['ALL', *sorted(refiner_manager.names())])
     help=(
         'Name used instead of the path name for guessing information about the file. '
         'If used with multiple paths or a directory, `name` is passed to ALL the files. '
-        'NAME may also be a sed-like substitution `s/pattern/replacement/flags` '
-        '(flags `g` and `i` are supported), applied to each file name individually. '
-        'Or, when --name-pattern is given, NAME is used as a template whose '
-        r'back-references (\1, \2, ...) are filled from the match on each file name.'
-    ),
-)
-@click.option(
-    '--name-pattern',
-    type=click.STRING,
-    metavar='PATTERN',
-    default=None,
-    help=(
-        'Regular expression matched against each file name to capture groups that are '
-        r'substituted into the --name template (\1, \2, ...). Ignored when --name is '
-        'a sed-like substitution expression.'
+        'NAME may also be a sed-like substitution `s/pattern/replacement/flags`, applied '
+        r'to each file name individually: back-references (\1, \2, ...) are available in '
+        'the replacement, `&` is a literal character and the `g` (replace all) and `i` '
+        '(case-insensitive) flags are supported.'
     ),
 )
 @click.option('-v', '--verbose', count=True, help='Increase verbosity.')
@@ -384,7 +373,6 @@ def download(
     archives: bool,
     use_absolute_path: str,
     name: str | None,
-    name_pattern: str | None,
     verbose: int,
     path: list[str],
 ) -> None:
@@ -406,9 +394,9 @@ def download(
     if not subtitle_format or subtitle_format in ['""', "''"]:
         subtitle_format = None
 
-    # build the per-file name resolver (static name, sed substitution or template + pattern)
+    # build the per-file name resolver (static name or sed-like substitution)
     try:
-        name_resolver = NameResolver(name, name_pattern)
+        name_resolver = NameResolver(name)
     except ValueError as e:
         raise click.BadParameter(str(e), param_hint='--name') from e
 
