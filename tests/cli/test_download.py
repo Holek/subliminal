@@ -571,6 +571,32 @@ def test_cli_download_name_sed(cli_runner: CliRunner, monkeypatch: pytest.Monkey
         assert ('YP-1R-01x05-720p.mkv', 'My Little Pony S01E05.mkv') in captured
 
 
+def test_cli_download_name_static(cli_runner: CliRunner, monkeypatch: pytest.MonkeyPatch) -> None:
+    import subliminal.cli.commands.download_best as dl
+
+    captured: list[tuple[str, str | None]] = []
+    orig_scan_path = dl.scan_path
+
+    def spy_scan_path(filepath: str, *, name: str | None = None) -> object:
+        captured.append((os.path.basename(os.fspath(filepath)), name))
+        return orig_scan_path(filepath, name=name)
+
+    monkeypatch.setattr(dl, 'scan_path', spy_scan_path)
+
+    # a static name starting with 's' and containing non-alphanumeric characters,
+    # to check it is not mistaken for a sed-like substitution
+    static_name = 's.w.a.t.2017.s01e01.720p.hdtv.x264-killers.mkv'
+    with cli_runner.isolated_filesystem():
+        result = cli_runner.run(
+            subliminal_cli,
+            ['download', '-l', 'en', '-p', 'podnapisi', '--name', static_name, 'badly-named-video.mkv'],
+        )
+
+        assert result.exit_code == 0
+        # the same static name is passed to every file
+        assert ('badly-named-video.mkv', static_name) in captured
+
+
 def test_cli_download_name_ampersand(cli_runner: CliRunner, monkeypatch: pytest.MonkeyPatch) -> None:
     import subliminal.cli.commands.download_best as dl
 

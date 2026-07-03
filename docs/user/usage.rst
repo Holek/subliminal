@@ -33,31 +33,6 @@ Download English subtitles::
     only. Otherwise you will get banned from the providers for abuse due to too many requests. If subliminal didn't
     find subtitles for an old video, it's unlikely it will find subtitles for that video ever anyway.
 
-Parameterized name
-^^^^^^^^^^^^^^^^^^^
-
-The ``--name/-n`` option lets you override the name used to guess information about a file. In addition to a
-plain static name, it can rewrite each file name individually so you no longer need a shell loop to rename
-poorly-named releases before downloading.
-
-Pass a `sed <https://www.gnu.org/software/sed/manual/sed.html>`_-like substitution
-``s/pattern/replacement/flags`` and it is applied to every file name on its own. Back-references
-(``\1``, ``\2``, …) are available in the replacement, and the ``g`` (replace all occurrences) and ``i``
-(case-insensitive) flags are supported::
-
-    $ subliminal download -l pl \
-        --name 's/.*YP-1R-([0-9]+)x([0-9]+).*/My Little Pony Friendship Is Magic S\1E\2.mkv/' \
-        */YP-1R-*.mkv
-
-Unlike sed, ``&`` is a literal character (not the whole match), so titles containing an ampersand need
-no escaping::
-
-    $ subliminal download -l pl \
-        --name 's/.*_-_([0-9]+)_.*/Panty & Stocking with Garterbelt S01E\1.mkv/' \
-        *Garterbelt_-_*.mkv
-
-Any file whose name does not match is left untouched and scanned as-is.
-
 You can use a configuration file in the `TOML <https://toml.io/en/>`_ format with the ``--config/-c`` option. If no configuration file is
 provided, it looks for a ``subliminal.toml`` file in the default configuration folder for the application. This folder is
 `OS dependent <https://github.com/tox-dev/platformdirs>`_:
@@ -76,6 +51,31 @@ See :ref:`cli` for more details on the available commands and options.
 
         $ python -m subliminal download -h
 
+
+Parameterized name
+^^^^^^^^^^^^^^^^^^^
+
+The ``--name/-n`` option lets you override the file name that is used to guess information about a video.
+In addition to a static alternative name, you can use a
+`sed <https://www.gnu.org/software/sed/manual/sed.html>`_-like substitution pattern
+``s/pattern/replacement/flags`` to override the names of all the files in a folder.
+The pattern needs to be a valid Python regex. Back-references (``\1``, ``\2``, …) are available in the
+replacement, and the ``g`` (replace all occurrences) and ``i`` (case-insensitive) flags are supported::
+
+    $ subliminal download -l pl \
+        --name 's/.*YP-1R-([0-9]+)x([0-9]+).*/My Little Pony Friendship Is Magic S\1E\2.mkv/' \
+        */YP-1R-*.mkv
+
+Unlike sed, ``&`` is a literal character (not the whole match), so titles containing an ampersand need
+no escaping::
+
+    $ subliminal download -l pl \
+        --name 's/.*_-_([0-9]+)_.*/Panty & Stocking with Garterbelt S01E\1.mkv/' \
+        *Garterbelt_-_*.mkv
+
+The substitution is applied to the path of each file (after the optional conversion to an absolute path
+with ``--use-absolute-path``), so the pattern can also match parent directories. Any file whose path does
+not match is left untouched and scanned as-is.
 
 Nautilus/Nemo integration
 -------------------------

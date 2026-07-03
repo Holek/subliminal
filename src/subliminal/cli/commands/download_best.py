@@ -334,8 +334,8 @@ REFINER = click.Choice(['ALL', *sorted(refiner_manager.names())])
         'Name used instead of the path name for guessing information about the file. '
         'If used with multiple paths or a directory, `name` is passed to ALL the files. '
         'NAME may also be a sed-like substitution `s/pattern/replacement/flags`, applied '
-        r'to each file name individually: back-references (\1, \2, ...) are available in '
-        'the replacement, `&` is a literal character and the `g` (replace all) and `i` '
+        r'to each file path individually: back-references (\1, \2, ...) are available in '
+        'the replacement, `&` is a literal character (unlike in sed) and the `g` (replace all) and `i` '
         '(case-insensitive) flags are supported.'
     ),
 )
@@ -476,11 +476,9 @@ def download(
             # scan videos
             video_candidates: list[Video] = []
             for filepath in collected_filepaths:
-                # Resolve the name to use for this specific file
-                file_name = name_resolver(filepath)
                 # Try scanning the video at path
                 video = scan_video_path(
-                    filepath, absolute_path=absolute_path, name=file_name, verbose=verbose, debug=debug
+                    filepath, absolute_path=absolute_path, name=name_resolver, verbose=verbose, debug=debug
                 )
                 if video is None:
                     # Fallback to scanning with absolute path
@@ -488,7 +486,7 @@ def download(
                         video = scan_video_path(
                             filepath,
                             absolute_path=True,
-                            name=file_name,
+                            name=name_resolver,
                             verbose=verbose,
                             debug=debug,
                         )
@@ -659,7 +657,7 @@ def download(
 def scan_video_path(
     filepath: str | os.PathLike[str],
     *,
-    name: str | None = None,
+    name: str | NameResolver | None = None,
     absolute_path: bool = False,
     verbose: int = 0,
     debug: bool = False,
@@ -669,11 +667,13 @@ def scan_video_path(
     # Take the absolute path, and only if the path exists
     if absolute_path and exists:
         filepath = os.path.abspath(filepath)
+    # Resolve the name for this specific file, after the conversion to absolute path
+    file_name = name(filepath) if isinstance(name, NameResolver) else name
     # Used for print
-    filepath_or_name = f'{filepath} ({name})' if name else filepath
+    filepath_or_name = f'{filepath} ({file_name})' if file_name else filepath
 
     try:
-        video = scan_path(filepath, name=name)
+        video = scan_path(filepath, name=file_name)
 
     except GuessingError as e:
         logger.exception(

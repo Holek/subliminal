@@ -27,6 +27,7 @@ from subliminal.utils import (
     sanitize,
     sanitize_id,
     sanitize_release_group,
+    split_esc,
     trim_pattern,
 )
 
@@ -369,16 +370,32 @@ def test_trim_pattern(string: str, patterns: str | Sequence[str], sep: str, expe
 
 
 @pytest.mark.parametrize(
+    ('string', 'delimiter', 'expected'),
+    [
+        ('a/b/', '/', ['a', 'b', '']),
+        ('a/b', '/', ['a', 'b']),
+        (r'a\/b/c/', '/', [r'a\/b', 'c', '']),  # escaped delimiter is not split on
+        (r'a\1/b/', '/', [r'a\1', 'b', '']),  # escaped non-delimiter is kept
+        ('a/b\\', '/', ['a', 'b']),  # trailing backslash
+        ('', '/', ['']),
+    ],
+)
+def test_split_esc(string: str, delimiter: str, expected: list[str]) -> None:
+    assert list(split_esc(string, delimiter)) == expected
+
+
+@pytest.mark.parametrize(
     ('expr', 'expected'),
     [
         ('s/a/b/', ('a', 'b', '')),
         ('s/a/b/gi', ('a', 'b', 'gi')),
-        (r's/a\/b/c/', ('a/b', 'c', '')),  # escaped delimiter inside pattern
+        (r's/a\/b/c/', (r'a\/b', 'c', '')),  # escaped delimiter inside pattern, backslash is kept
         ('s|a|b|', ('a', 'b', '')),  # alternative delimiter
         (r's/.*S(\d+)E(\d+).*/S\1E\2/', (r'.*S(\d+)E(\d+).*', r'S\1E\2', '')),
         ('s/a/b', None),  # missing closing delimiter
         ('s/a/b/c/d', None),  # too many segments
         ('show.s01.e01.mkv', None),  # plain name with several dots
+        ('s.w.a.t.2017.s01e01.mkv', None),  # plain name starting with 's' and a non-alphanumeric character
         ('My Show S01E01.mkv', None),  # plain name
         ('sea/b/c', None),  # delimiter is alphanumeric
         ('', None),
@@ -409,6 +426,13 @@ def test_name_resolver_sed() -> None:
     assert resolver('unrelated.mkv') is None
 
 
+def test_name_resolver_sed_matches_full_path() -> None:
+    # the substitution is applied to the whole path, so it can match parent directories
+    resolver = NameResolver(r's#.*Season ([0-9]+)/Episode ([0-9]+).*#My Show S\1E\2.mkv#')
+    assert resolver('/videos/My Show/Season 02/Episode 05.mkv') == 'My Show S02E05.mkv'
+    assert resolver('Episode 05.mkv') is None
+
+
 def test_name_resolver_sed_flags() -> None:
     # without g, only the first occurrence is replaced
     assert NameResolver('s/a/X/')('aaa.mkv') == 'Xaa.mkv'
@@ -421,8 +445,8 @@ def test_name_resolver_sed_flags() -> None:
 def test_name_resolver_sed_ampersand_is_literal() -> None:
     # unlike sed, & is a literal character (not the whole match)
     assert NameResolver('s/[0-9]+/[&]/')('ep12.mkv') == 'ep[&].mkv'
-    # an escaped \& also yields a literal &
-    assert NameResolver(r's/[0-9]+/\&/')('ep12.mkv') == 'ep&.mkv'
+    # \& is not unescaped, it is passed as-is to re.sub which keeps it verbatim
+    assert NameResolver(r's/[0-9]+/\&/')('ep12.mkv') == r'ep\&.mkv'
     # so a real-world title with & needs no escaping
     resolver = NameResolver(r's/.*_-_([0-9]+)_.*/Panty & Stocking S01E\1.mkv/')
     assert resolver('Garterbelt_-_07_xyz.mkv') == 'Panty & Stocking S01E07.mkv'

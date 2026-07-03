@@ -8,7 +8,7 @@ import os
 import platform
 import re
 import socket
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator
 from datetime import datetime, timedelta, timezone
 from types import GeneratorType
 from typing import TYPE_CHECKING, Any, Generic, TypeVar, cast, overload
@@ -76,6 +76,33 @@ def safely_guessit(name: str | None, options: dict[str, Any] | None = None) -> d
     return result
 
 
+def split_esc(string: str, delimiter: str) -> Iterator[str]:
+    """Split the string by the non-escaped delimiter.
+
+    Return an iterator of the string parts.
+    """
+    dln = len(delimiter)
+    ln = len(string)
+    i = 0
+    j = 0
+    while j < ln:
+        # Delimiter found
+        if string[j : j + dln] == delimiter:
+            yield string[i:j]
+            j += dln
+            i = j
+        # Escaped character
+        elif string[j] == '\\':
+            if j + 1 >= ln:
+                yield string[i:j]
+                return
+            j += 2
+        # Other character
+        else:
+            j += 1
+    yield string[i:j]
+
+
 def parse_sed_expression(expr: str) -> tuple[str, str, str] | None:
     """Parse a sed-like substitution ``s<delim>pattern<delim>replacement<delim>flags``.
 
@@ -95,61 +122,11 @@ def parse_sed_expression(expr: str) -> tuple[str, str, str] | None:
     if delim.isalnum() or delim == '\\' or delim.isspace():
         return None
 
-    segments: list[str] = []
-    current: list[str] = []
-    i = 2
-    n = len(expr)
-    while i < n:
-        c = expr[i]
-        if c == '\\' and i + 1 < n:
-            nxt = expr[i + 1]
-            if nxt == delim:
-                # Unescape an escaped delimiter
-                current.append(delim)
-            else:
-                current.append(c)
-                current.append(nxt)
-            i += 2
-            continue
-        if c == delim:
-            segments.append(''.join(current))
-            current = []
-            i += 1
-            continue
-        current.append(c)
-        i += 1
-    segments.append(''.join(current))
-
+    segments = list(split_esc(expr[2:], delim))
     # Expect exactly pattern, replacement and flags (i.e. three delimiters total)
     if len(segments) != 3:
         return None
     return segments[0], segments[1], segments[2]
-
-
-def _sed_replacement_to_python(replacement: str) -> str:
-    r"""Adapt a sed replacement string to the :func:`re.sub` replacement syntax.
-
-    Group back-references (``\1`` … ``\9`` and ``\g<name>``) already match the
-    :func:`re.sub` syntax and are left untouched. Unlike sed, ``&`` is a literal
-    character here (it is *not* the whole match); an escaped ``\&`` is therefore
-    collapsed to a plain ``&`` so both spellings produce a literal ampersand.
-
-    :param str replacement: the sed-style replacement string.
-    :return: an equivalent :func:`re.sub` replacement string.
-    :rtype: str
-    """
-    out: list[str] = []
-    i = 0
-    n = len(replacement)
-    while i < n:
-        c = replacement[i]
-        if c == '\\' and i + 1 < n and replacement[i + 1] == '&':
-            out.append('&')
-            i += 2
-            continue
-        out.append(c)
-        i += 1
-    return ''.join(out)
 
 
 class NameResolver:
@@ -160,19 +137,25 @@ class NameResolver:
     * **static** -- `name` is a plain string: the same `name` is used for every
       file (the historical behaviour).
     * **sed** -- `name` is a ``s/pattern/replacement/flags`` substitution: the
-      substitution is applied to each file base name following sed semantics (the
-      unmatched part of the name is kept). Back-references (``\1`` …) are
-      available in the replacement, ``&`` is a literal character and the
-      supported flags are ``g`` (replace all occurrences instead of the first)
-      and ``i`` (case-insensitive match).
+      substitution is applied to each file path following sed semantics (the
+      unmatched part of the path is kept). Back-references (``\1`` …) are
+      available in the replacement, ``&`` is a literal character (unlike in sed)
+      and the supported flags are ``g`` (replace all occurrences instead of the
+      first) and ``i`` (case-insensitive match).
 
-    In the sed mode, a file whose base name does not match is left untouched
+    In the sed mode, a file whose path does not match is left untouched
     (``None`` is returned, and the original path is used as before).
 
     :param str name: the ``--name`` value, may be ``None``.
     :raises ValueError: if the sed expression contains an invalid regular
         expression or an unsupported flag.
     """
+
+    name: str | None
+    mode: str
+    _regex: re.Pattern[str] | None
+    _replacement: str
+    _count: int
 
     def __init__(self, name: str | None = None) -> None:
         self.name = name
@@ -200,7 +183,7 @@ class NameResolver:
         except re.error as e:
             msg = f'Invalid regular expression {pattern!r} in name expression {name!r}: {e}'
             raise ValueError(msg) from e
-        self._replacement = _sed_replacement_to_python(replacement)
+        self._replacement = replacement
         self._count = 0 if 'g' in flags else 1
         self.mode = 'sed'
 
@@ -209,14 +192,14 @@ class NameResolver:
         if self.mode == 'static' or self._regex is None:
             return self.name
 
-        base = os.path.basename(os.fspath(filepath))
+        path = os.fspath(filepath)
         try:
-            new_name, count = self._regex.subn(self._replacement, base, count=self._count)
+            new_name, count = self._regex.subn(self._replacement, path, count=self._count)
         except re.error:
-            logger.exception('Failed to apply name expression %r to %r', self.name, base)
+            logger.exception('Failed to apply name expression %r to %r', self.name, path)
             return None
         if count == 0:
-            logger.warning('Name expression %r did not match %r', self.name, base)
+            logger.warning('Name expression %r did not match %r', self.name, path)
             return None
         return new_name
 
