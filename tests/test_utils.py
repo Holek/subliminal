@@ -29,6 +29,7 @@ from subliminal.utils import (
     sanitize_release_group,
     split_esc,
     trim_pattern,
+    unescape_delimiter,
 )
 
 if TYPE_CHECKING:
@@ -369,12 +370,22 @@ def test_trim_pattern(string: str, patterns: str | Sequence[str], sep: str, expe
     assert res == expected
 
 
+def test_unescape_delimiter() -> None:
+    string = r'unescape_\/delim'
+    delim = '/'
+    out = unescape_delimiter(string, delim)
+
+    expected = 'unescape_/delim'
+    assert out == expected
+
+
 @pytest.mark.parametrize(
     ('string', 'delimiter', 'expected'),
     [
         ('a/b/', '/', ['a', 'b', '']),
         ('a/b', '/', ['a', 'b']),
-        (r'a\/b/c/', '/', [r'a\/b', 'c', '']),  # escaped delimiter is not split on
+        (r'a\/b/c/', '/', ['a/b', 'c', '']),  # escaped delimiter is not split on
+        (r'a/b\//c', '/', ['a', 'b/', 'c']),  # escaped delimiter
         (r'a\1/b/', '/', [r'a\1', 'b', '']),  # escaped non-delimiter is kept
         ('a/b\\', '/', ['a', 'b']),  # trailing backslash
         ('', '/', ['']),
@@ -389,7 +400,7 @@ def test_split_esc(string: str, delimiter: str, expected: list[str]) -> None:
     [
         ('s/a/b/', ('a', 'b', '')),
         ('s/a/b/gi', ('a', 'b', 'gi')),
-        (r's/a\/b/c/', (r'a\/b', 'c', '')),  # escaped delimiter inside pattern, backslash is kept
+        (r's/a\/b/c/', ('a/b', 'c', '')),  # escaped delimiter inside pattern, unescaped
         ('s|a|b|', ('a', 'b', '')),  # alternative delimiter
         (r's/.*S(\d+)E(\d+).*/S\1E\2/', (r'.*S(\d+)E(\d+).*', r'S\1E\2', '')),
         ('s/a/b', None),  # missing closing delimiter
