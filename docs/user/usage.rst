@@ -57,7 +57,7 @@ Parameterized name
 
 The ``--name/-n`` option lets you override the file name that is used to guess information about a video.
 In addition to a static alternative name, you can use a
-`sed <https://www.gnu.org/software/sed/manual/sed.html>`_-like substitution pattern
+`sed <https://www.gnu.org/software/sed/>`_-like substitution pattern
 ``s/pattern/replacement/flags`` to override the names of all the files in a folder.
 The pattern needs to be a valid Python regex. Back-references (``\1``, ``\2``, …) are available in the
 replacement, and the ``g`` (replace all occurrences) and ``i`` (case-insensitive) flags are supported::
