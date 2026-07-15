@@ -22,7 +22,7 @@ from .exceptions import ServiceUnavailable
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence, Set
-    from typing import TypedDict, TypeGuard
+    from typing import Literal, TypedDict, TypeGuard
 
     S = TypeVar('S')
 
@@ -76,6 +76,11 @@ def safely_guessit(name: str | None, options: dict[str, Any] | None = None) -> d
     return result
 
 
+def unescape_delimiter(string: str, delimiter: str) -> str:
+    """Unescape delimiter."""
+    return string.replace(f'\\{delimiter}', delimiter)
+
+
 def split_esc(string: str, delimiter: str) -> Iterator[str]:
     """Split the string by the non-escaped delimiter.
 
@@ -88,19 +93,19 @@ def split_esc(string: str, delimiter: str) -> Iterator[str]:
     while j < ln:
         # Delimiter found
         if string[j : j + dln] == delimiter:
-            yield string[i:j]
+            yield unescape_delimiter(string[i:j], delimiter)
             j += dln
             i = j
         # Escaped character
         elif string[j] == '\\':
             if j + 1 >= ln:
-                yield string[i:j]
+                yield unescape_delimiter(string[i:j], delimiter)
                 return
             j += 2
         # Other character
         else:
             j += 1
-    yield string[i:j]
+    yield unescape_delimiter(string[i:j], delimiter)
 
 
 def parse_sed_expression(expr: str) -> tuple[str, str, str] | None:
@@ -135,7 +140,7 @@ class NameResolver:
     The behaviour is selected from the `name` input:
 
     * **static** -- `name` is a plain string: the same `name` is used for every
-      file (the historical behaviour).
+      file.
     * **sed** -- `name` is a ``s/pattern/replacement/flags`` substitution: the
       substitution is applied to each file path following sed semantics (the
       unmatched part of the path is kept). Back-references (``\1`` …) are
@@ -152,14 +157,14 @@ class NameResolver:
     """
 
     name: str | None
-    mode: str
+    _mode: Literal['static', 'sed']
     _regex: re.Pattern[str] | None
     _replacement: str
     _count: int
 
     def __init__(self, name: str | None = None) -> None:
         self.name = name
-        self.mode = 'static'
+        self._mode = 'static'
         self._regex: re.Pattern[str] | None = None
         self._replacement = ''
         self._count = 1
@@ -185,11 +190,16 @@ class NameResolver:
             raise ValueError(msg) from e
         self._replacement = replacement
         self._count = 0 if 'g' in flags else 1
-        self.mode = 'sed'
+        self._mode = 'sed'
+
+    @property
+    def mode(self) -> Literal['static', 'sed']:
+        """Name resolver mode."""
+        return self._mode
 
     def __call__(self, filepath: str | os.PathLike[str]) -> str | None:
         """Return the name to use for `filepath`, or ``None`` to use the path as-is."""
-        if self.mode == 'static' or self._regex is None:
+        if self._mode == 'static' or self._regex is None:
             return self.name
 
         path = os.fspath(filepath)
